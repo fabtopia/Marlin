@@ -119,7 +119,7 @@
 // The following define selects which electronics board you have.
 // Please choose the name from boards.h that matches your setup
 #ifndef MOTHERBOARD
-  #define GT2560_REV_A_PLUS
+  #define MOTHERBOARD BOARD_GT2560_REV_A_PLUS
 #endif
 
 // Optional custom name for your RepStrap or other custom machine
@@ -134,7 +134,7 @@
 
 // This defines the number of extruders
 // :[1, 2, 3, 4, 5]
-#define EXTRUDERS 0
+#define EXTRUDERS 1
 
 // Generally expected filament diameter (1.75, 2.85, 3.0, ...). Used for Volumetric, Filament Width Sensor, etc.
 #define DEFAULT_NOMINAL_FILAMENT_DIA 3.0
