@@ -36,13 +36,13 @@
  *
  */
 
-#define EEPROM_VERSION "V47"
+#define EEPROM_VERSION "V48"
 
 // Change EEPROM version if these are changed:
 #define EEPROM_OFFSET 100
 
 /**
- * V47 EEPROM Layout:
+ * V48 EEPROM Layout:
  *
  *  100  Version                                    (char x4)
  *  104  EEPROM CRC16                               (uint16_t)
@@ -139,7 +139,7 @@
  *
  * Volumetric Extrusion:                            21 bytes
  *  539  M200 D    parser.volumetric_enabled        (bool)
- *  540  M200 T D  planner.filament_size            (float x5) (T0..3)
+ *  540  M200 T D  planner.filament_size            (float x5) (T0..4)
  *
  * HAS_TRINAMIC:                                    22 bytes
  *  560  M906 X    Stepper X current                (uint16_t)
@@ -154,7 +154,7 @@
  *  578  M906 E3   Stepper E3 current               (uint16_t)
  *  580  M906 E4   Stepper E4 current               (uint16_t)
  *
- * SENSORLESS HOMING                                4 bytes
+ * SENSORLESS_HOMING:                               4 bytes
  *  582  M914 X    Stepper X and X2 threshold       (int16_t)
  *  584  M914 Y    Stepper Y and Y2 threshold       (int16_t)
  *
@@ -167,7 +167,7 @@
  *  598  M907 Z    Stepper Z current                (uint32_t)
  *  602  M907 E    Stepper E current                (uint32_t)
  *
- * CNC_COORDINATE_SYSTEMS                           108 bytes
+ * CNC_COORDINATE_SYSTEMS:                          108 bytes
  *  606  G54-G59.3 coordinate_system                (float x 27)
  *
  * SKEW_CORRECTION:                                 12 bytes
@@ -175,8 +175,12 @@
  *  718  M852 J    planner.xz_skew_factor           (float)
  *  722  M852 K    planner.yz_skew_factor           (float)
  *
- *  726                                   Minimum end-point
- * 2255 (726 + 208 + 36 + 9 + 288 + 988)  Maximum end-point
+ * ADVANCED_PAUSE_FEATURE:                          40 bytes
+ *  726  M603 T U  filament_change_unload_length    (float x 5) (T0..4)
+ *  746  M603 T L  filament_change_load_length      (float x 5) (T0..4)
+ *
+ *  766                                   Minimum end-point
+ * 2295 (766 + 208 + 36 + 9 + 288 + 988)  Maximum end-point
  *
  * ========================================================================
  * meshes_begin (between max and min end-point, directly above)
@@ -209,6 +213,10 @@ MarlinSettings settings;
 
 #if ENABLED(AUTO_BED_LEVELING_UBL)
   #include "ubl.h"
+#endif
+
+#if ENABLED(FWRETRACT)
+  #include "fwretract.h"
 #endif
 
 #if ENABLED(AUTO_BED_LEVELING_BILINEAR)
@@ -551,24 +559,20 @@ void MarlinSettings::postprocess() {
 
     #if DISABLED(FWRETRACT)
       const bool autoretract_enabled = false;
-      const float retract_length = 3,
-                  retract_feedrate_mm_s = 45,
-                  retract_zlift = 0,
-                  retract_recover_length = 0,
-                  retract_recover_feedrate_mm_s = 0,
-                  swap_retract_length = 13,
-                  swap_retract_recover_length = 0,
-                  swap_retract_recover_feedrate_mm_s = 8;
+      const float autoretract_defaults[] = { 3, 45, 0, 0, 0, 13, 0, 8 };
+      EEPROM_WRITE(autoretract_enabled);
+      EEPROM_WRITE(autoretract_defaults);
+    #else
+      EEPROM_WRITE(fwretract.autoretract_enabled);
+      EEPROM_WRITE(fwretract.retract_length);
+      EEPROM_WRITE(fwretract.retract_feedrate_mm_s);
+      EEPROM_WRITE(fwretract.retract_zlift);
+      EEPROM_WRITE(fwretract.retract_recover_length);
+      EEPROM_WRITE(fwretract.retract_recover_feedrate_mm_s);
+      EEPROM_WRITE(fwretract.swap_retract_length);
+      EEPROM_WRITE(fwretract.swap_retract_recover_length);
+      EEPROM_WRITE(fwretract.swap_retract_recover_feedrate_mm_s);
     #endif
-    EEPROM_WRITE(autoretract_enabled);
-    EEPROM_WRITE(retract_length);
-    EEPROM_WRITE(retract_feedrate_mm_s);
-    EEPROM_WRITE(retract_zlift);
-    EEPROM_WRITE(retract_recover_length);
-    EEPROM_WRITE(retract_recover_feedrate_mm_s);
-    EEPROM_WRITE(swap_retract_length);
-    EEPROM_WRITE(swap_retract_recover_length);
-    EEPROM_WRITE(swap_retract_recover_feedrate_mm_s);
 
     //
     // Volumetric & Filament Size
@@ -723,6 +727,23 @@ void MarlinSettings::postprocess() {
     #else
       dummy = 0.0f;
       for (uint8_t q = 3; q--;) EEPROM_WRITE(dummy);
+    #endif
+
+    //
+    // Advanced Pause filament load & unload lengths
+    //
+    #if ENABLED(ADVANCED_PAUSE_FEATURE)
+      for (uint8_t q = 0; q < MAX_EXTRUDERS; q++) {
+        if (q < COUNT(filament_change_unload_length)) dummy = filament_change_unload_length[q];
+        EEPROM_WRITE(dummy);
+      }
+      for (uint8_t q = 0; q < MAX_EXTRUDERS; q++) {
+        if (q < COUNT(filament_change_load_length)) dummy = filament_change_load_length[q];
+        EEPROM_WRITE(dummy);
+      }
+    #else
+      dummy = 0.0f;
+      for (uint8_t q = MAX_EXTRUDERS * 2; q--;) EEPROM_WRITE(dummy);
     #endif
 
     if (!eeprom_error) {
@@ -1049,15 +1070,15 @@ void MarlinSettings::postprocess() {
       //
 
       #if ENABLED(FWRETRACT)
-        EEPROM_READ(autoretract_enabled);
-        EEPROM_READ(retract_length);
-        EEPROM_READ(retract_feedrate_mm_s);
-        EEPROM_READ(retract_zlift);
-        EEPROM_READ(retract_recover_length);
-        EEPROM_READ(retract_recover_feedrate_mm_s);
-        EEPROM_READ(swap_retract_length);
-        EEPROM_READ(swap_retract_recover_length);
-        EEPROM_READ(swap_retract_recover_feedrate_mm_s);
+        EEPROM_READ(fwretract.autoretract_enabled);
+        EEPROM_READ(fwretract.retract_length);
+        EEPROM_READ(fwretract.retract_feedrate_mm_s);
+        EEPROM_READ(fwretract.retract_zlift);
+        EEPROM_READ(fwretract.retract_recover_length);
+        EEPROM_READ(fwretract.retract_recover_feedrate_mm_s);
+        EEPROM_READ(fwretract.swap_retract_length);
+        EEPROM_READ(fwretract.swap_retract_recover_length);
+        EEPROM_READ(fwretract.swap_retract_recover_feedrate_mm_s);
       #else
         EEPROM_READ(dummyb);
         for (uint8_t q=8; q--;) EEPROM_READ(dummy);
@@ -1207,6 +1228,23 @@ void MarlinSettings::postprocess() {
         for (uint8_t q = 3; q--;) EEPROM_READ(dummy);
       #endif
 
+      //
+      // Advanced Pause filament load & unload lengths
+      //
+
+      #if ENABLED(ADVANCED_PAUSE_FEATURE)
+        for (uint8_t q = 0; q < MAX_EXTRUDERS; q++) {
+          EEPROM_READ(dummy);
+          if (q < COUNT(filament_change_unload_length)) filament_change_unload_length[q] = dummy;
+        }
+        for (uint8_t q = 0; q < MAX_EXTRUDERS; q++) {
+          EEPROM_READ(dummy);
+          if (q < COUNT(filament_change_load_length)) filament_change_load_length[q] = dummy;
+        }
+      #else
+        for (uint8_t q = MAX_EXTRUDERS * 2; q--;) EEPROM_READ(dummy);
+      #endif
+
       if (working_crc == stored_crc) {
         postprocess();
         #if ENABLED(EEPROM_CHITCHAT)
@@ -1295,7 +1333,7 @@ void MarlinSettings::postprocess() {
     void MarlinSettings::store_mesh(const int8_t slot) {
 
       #if ENABLED(AUTO_BED_LEVELING_UBL)
-        const uint16_t a = calc_num_meshes();
+        const int16_t a = calc_num_meshes();
         if (!WITHIN(slot, 0, a - 1)) {
           #if ENABLED(EEPROM_CHITCHAT)
             ubl_invalid_slot(a);
@@ -1329,7 +1367,7 @@ void MarlinSettings::postprocess() {
 
       #if ENABLED(AUTO_BED_LEVELING_UBL)
 
-        const uint16_t a = settings.calc_num_meshes();
+        const int16_t a = settings.calc_num_meshes();
 
         if (!WITHIN(slot, 0, a - 1)) {
           #if ENABLED(EEPROM_CHITCHAT)
@@ -1511,16 +1549,8 @@ void MarlinSettings::reset() {
   #endif
 
   #if ENABLED(FWRETRACT)
-    autoretract_enabled = false;
-    retract_length = RETRACT_LENGTH;
-    retract_feedrate_mm_s = RETRACT_FEEDRATE;
-    retract_zlift = RETRACT_ZLIFT;
-    retract_recover_length = RETRACT_RECOVER_LENGTH;
-    retract_recover_feedrate_mm_s = RETRACT_RECOVER_FEEDRATE;
-    swap_retract_length = RETRACT_LENGTH_SWAP;
-    swap_retract_recover_length = RETRACT_RECOVER_LENGTH_SWAP;
-    swap_retract_recover_feedrate_mm_s = RETRACT_RECOVER_FEEDRATE_SWAP;
-  #endif // FWRETRACT
+    fwretract.reset();
+  #endif
 
   #if DISABLED(NO_VOLUMETRICS)
 
@@ -1610,6 +1640,13 @@ void MarlinSettings::reset() {
       planner.xz_skew_factor = XZ_SKEW_FACTOR;
       planner.yz_skew_factor = YZ_SKEW_FACTOR;
     #endif
+  #endif
+
+  #if ENABLED(ADVANCED_PAUSE_FEATURE)
+    for (uint8_t e = 0; e < E_STEPPERS; e++) {
+      filament_change_unload_length[e] = FILAMENT_CHANGE_UNLOAD_LENGTH;
+      filament_change_load_length[e] = FILAMENT_CHANGE_LOAD_LENGTH;
+    }
   #endif
 
   postprocess();
@@ -2007,26 +2044,26 @@ void MarlinSettings::reset() {
         SERIAL_ECHOLNPGM("Retract: S<length> F<units/m> Z<lift>");
       }
       CONFIG_ECHO_START;
-      SERIAL_ECHOPAIR("  M207 S", LINEAR_UNIT(retract_length));
-      SERIAL_ECHOPAIR(" W", LINEAR_UNIT(swap_retract_length));
-      SERIAL_ECHOPAIR(" F", MMS_TO_MMM(LINEAR_UNIT(retract_feedrate_mm_s)));
-      SERIAL_ECHOLNPAIR(" Z", LINEAR_UNIT(retract_zlift));
+      SERIAL_ECHOPAIR("  M207 S", LINEAR_UNIT(fwretract.retract_length));
+      SERIAL_ECHOPAIR(" W", LINEAR_UNIT(fwretract.swap_retract_length));
+      SERIAL_ECHOPAIR(" F", MMS_TO_MMM(LINEAR_UNIT(fwretract.retract_feedrate_mm_s)));
+      SERIAL_ECHOLNPAIR(" Z", LINEAR_UNIT(fwretract.retract_zlift));
 
       if (!forReplay) {
         CONFIG_ECHO_START;
         SERIAL_ECHOLNPGM("Recover: S<length> F<units/m>");
       }
       CONFIG_ECHO_START;
-      SERIAL_ECHOPAIR("  M208 S", LINEAR_UNIT(retract_recover_length));
-      SERIAL_ECHOPAIR(" W", LINEAR_UNIT(swap_retract_recover_length));
-      SERIAL_ECHOLNPAIR(" F", MMS_TO_MMM(LINEAR_UNIT(retract_recover_feedrate_mm_s)));
+      SERIAL_ECHOPAIR("  M208 S", LINEAR_UNIT(fwretract.retract_recover_length));
+      SERIAL_ECHOPAIR(" W", LINEAR_UNIT(fwretract.swap_retract_recover_length));
+      SERIAL_ECHOLNPAIR(" F", MMS_TO_MMM(LINEAR_UNIT(fwretract.retract_recover_feedrate_mm_s)));
 
       if (!forReplay) {
         CONFIG_ECHO_START;
         SERIAL_ECHOLNPGM("Auto-Retract: S=0 to disable, 1 to interpret E-only moves as retract/recover");
       }
       CONFIG_ECHO_START;
-      SERIAL_ECHOLNPAIR("  M209 S", autoretract_enabled ? 1 : 0);
+      SERIAL_ECHOLNPAIR("  M209 S", fwretract.autoretract_enabled ? 1 : 0);
 
     #endif // FWRETRACT
 
@@ -2052,11 +2089,14 @@ void MarlinSettings::reset() {
       }
       CONFIG_ECHO_START;
       #if ENABLED(SKEW_CORRECTION_FOR_Z)
-        SERIAL_ECHOPAIR("  M852 I", LINEAR_UNIT(planner.xy_skew_factor));
+        SERIAL_ECHO("  M852 I");
+        SERIAL_ECHO_F(LINEAR_UNIT(planner.xy_skew_factor), 6);
         SERIAL_ECHOPAIR(" J", LINEAR_UNIT(planner.xz_skew_factor));
         SERIAL_ECHOLNPAIR(" K", LINEAR_UNIT(planner.yz_skew_factor));
       #else
-        SERIAL_ECHOLNPAIR("  M852 S", LINEAR_UNIT(planner.xy_skew_factor));
+        SERIAL_ECHO("  M852 S");
+        SERIAL_ECHO_F(planner.xy_skew_factor, 6);
+        SERIAL_EOL();
       #endif
     #endif
 
@@ -2155,6 +2195,42 @@ void MarlinSettings::reset() {
       SERIAL_ECHOPAIR(" E", stepper.motor_current_setting[2]);
       SERIAL_EOL();
     #endif
+
+    /**
+     * Advanced Pause filament load & unload lengths
+     */
+    #if ENABLED(ADVANCED_PAUSE_FEATURE)
+      if (!forReplay) {
+        CONFIG_ECHO_START;
+        SERIAL_ECHOLNPGM("Filament load/unload lengths:");
+      }
+      CONFIG_ECHO_START;
+      #if EXTRUDERS == 1
+        SERIAL_ECHOPAIR("  M603 L", LINEAR_UNIT(filament_change_load_length[0]));
+        SERIAL_ECHOLNPAIR(" U", LINEAR_UNIT(filament_change_unload_length[0]));
+      #else
+        SERIAL_ECHOPAIR("  M603 T0 L", LINEAR_UNIT(filament_change_load_length[0]));
+        SERIAL_ECHOLNPAIR(" U", LINEAR_UNIT(filament_change_unload_length[0]));
+        CONFIG_ECHO_START;
+        SERIAL_ECHOPAIR("  M603 T1 L", LINEAR_UNIT(filament_change_load_length[1]));
+        SERIAL_ECHOLNPAIR(" U", LINEAR_UNIT(filament_change_unload_length[1]));
+        #if EXTRUDERS > 2
+          CONFIG_ECHO_START;
+          SERIAL_ECHOPAIR("  M603 T2 L", LINEAR_UNIT(filament_change_load_length[2]));
+          SERIAL_ECHOLNPAIR(" U", LINEAR_UNIT(filament_change_unload_length[2]));
+          #if EXTRUDERS > 3
+            CONFIG_ECHO_START;
+            SERIAL_ECHOPAIR("  M603 T3 L", LINEAR_UNIT(filament_change_load_length[3]));
+            SERIAL_ECHOLNPAIR(" U", LINEAR_UNIT(filament_change_unload_length[3]));
+            #if EXTRUDERS > 4
+              CONFIG_ECHO_START;
+              SERIAL_ECHOPAIR("  M603 T4 L", LINEAR_UNIT(filament_change_load_length[4]));
+              SERIAL_ECHOLNPAIR(" U", LINEAR_UNIT(filament_change_unload_length[4]));
+            #endif // EXTRUDERS > 4
+          #endif // EXTRUDERS > 3
+        #endif // EXTRUDERS > 2
+      #endif // EXTRUDERS == 1
+    #endif // ADVANCED_PAUSE_FEATURE
   }
 
 #endif // !DISABLE_M503
